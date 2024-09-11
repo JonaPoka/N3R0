@@ -1,8 +1,9 @@
+
 // ==UserScript==
-// @name        Intercept HTTP Responses to Extract storedStructure
-// @namespace   http://tampermonkey.net/
+// @name        N3r0 Dev Build
+// @namespace   http://n3r0.tech/
 // @version     1.25
-// @description Intercepts HTTP responses to extract storedStructure
+// @description Kun et vaan jaksaisi koulua
 // @author      You
 // @match       *://materiaalit.otava.fi/*
 // @grant       none
@@ -10,32 +11,148 @@
 
 (function() {
     'use strict';
-
-    // Only run in the top-level window
     if (window.self !== window.top) {
-        return; // Exit the script if running in an iframe
+        return;
     }
 
-    let storedAnswers = []; // To store answers globally
-    let floatingWindow = null; // To reference the floating window
-    let updateTimeout = null; // Timeout for throttling updates
+    let storedAnswers = [];
+    let floatingWindow = null;
+    let updateTimeout = null;
+    let currentFlashcardQuestion = null;
+    let currentStoredStructure = null;
+    let sectionIds = [];
+
+    let currentTaskId = null;
+
+
+    function findInputFields() {
+        console.log("searching")
+        let fields = []
+        let inputs = window.top.document.querySelector('iframe').contentDocument.querySelectorAll('input, textarea, [aria-label]');
+
+        inputs.forEach(input => {
+            if (input.getAttribute('aria-label') === 'Kirjoita vastaus') {
+                console.log('Found input:', input);
+                fields.push(input);
+            }
+        });
+        return fields;
+    }
+
+    function updateData(storedStructure) {
+        let metadata = storedStructure.structure.metadata
+        currentTaskId = metadata.taskId
+
+    }
+
+    function apiHandler(type, answer, sectionId) {
+        if (type === "structure-answer") {
+            fetch("https://materiaalit.otava.fi/o/task-container/a/" + currentTaskId + "/-/structure-answer", {
+                "headers": {
+                    "accept": "application/json, text/javascript, */*; q=0.01",
+                    "accept-language": "fi-FI,fi;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "cache-control": "no-cache",
+                    "content-type": "application/json; charset=UTF-8",
+                    "pragma": "no-cache",
+                    "priority": "u=1, i",
+                    "sec-ch-ua": "\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"127\", \"Chromium\";v=\"127\"",
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": "\"Linux\"",
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-origin",
+                    "x-csrf-token": "v4030WaqmcB27p1m",
+                    "x-requested-with": "XMLHttpRequest"
+                },
+                "referrer": "https://materiaalit.otava.fi/web/state-jurdsmbsga2celcpge/6107da4397dcff07e8e24e21",
+                "referrerPolicy": "strict-origin-when-cross-origin",
+                "body": "{\"questionId\":\"Q_64\",\"sectionId\":\""+ sectionId +"\",\"answer\":[\"" + answer + "\"],\"score\":0,\"graded\":1,\"materialId\":\"90204\",\"materialUuid\":\"5f8eda9b2c6196729023f81f\",\"page\":\"6107da4397dcff07e8e24e21\",\"pageUuid\":\"6087422edfa20c5a02dc7247\"}",
+                "method": "POST",
+                "mode": "cors",
+                "credentials": "include"
+            });
+        }
+    }
+
+    function autoAnswer() {
+        let inputFields = findInputFields();
+        if (inputFields) {
+            for (var i = 0; i < inputFields.length; i++) {
+                inputFields[i].value = storedAnswers[i]
+                apiHandler("structure-answer", storedAnswers[i], sectionIds[i])
+            }
+        }
+    }
+
+    function extractFlashcardQuestion() {
+        // Check if the question type is flashcards
+        const flashcardContainer = window.top.document.querySelector('iframe').contentDocument.querySelector('.flashcards');
+        if (!flashcardContainer) return;
+        console.log("Extracting flashcard questions")
+        // Find the flashcard question inside the paragraph
+        const flashcardQuestion = window.top.document.querySelector('iframe').contentDocument.querySelector("#question-Q_1424 > div.content-view-wrapper > div > div:nth-child(2) > div.flashcards-term > div > div > div")
+        console.log('Current Flashcard Question:', flashcardQuestion.innerText);
+        if (currentFlashcardQuestion !== flashcardQuestion.innerText) {
+            currentFlashcardQuestion = flashcardQuestion.innerText
+        }
+        storedAnswers = extractCorrectAnswers(currentStoredStructure)
+    }
 
     function extractCorrectAnswers(storedStructure) {
+        console.log(storedStructure);
         const questions = storedStructure.structure.questions;
         const correctAnswers = [];
+        sectionIds = [];
 
         questions.forEach(question => {
-            question.sections.forEach(section => {
-                section.choices.forEach(choice => {
-                    if (choice.correct) {
-                        correctAnswers.push(choice.correct);
+            console.log(question.type);
+
+            // Check for 'fillintheblank' type questions
+            if (question.type === "fillintheblank" || question.type === "multiplechoice") {
+                question.sections.forEach(section => {
+                    let correctChoice = null;
+                    let maxPoints = -1;
+
+                    sectionIds.push(section.id)
+
+                    section.choices.forEach(choice => {
+                        // Find the choice with the highest points
+                        if (choice.points > maxPoints) {
+                            maxPoints = choice.points;
+                            correctChoice = choice.name;
+                        }
+                    });
+
+                    if (correctChoice) {
+                        correctAnswers.push(correctChoice);
                     }
                 });
-            });
+            }
+
+            // Check for 'flashcards' type questions
+            else if (question.type == "flashcards") {
+                question.sections.forEach(section => {
+                    if (section.name === currentFlashcardQuestion) {
+                        section.choices.forEach(choice => {
+                            console.log("Correct: " + choice.name)
+                            correctAnswers.push(choice.name);
+                        });
+                    }
+                });
+            }
+
+            else if (question.type === "open") return correctAnswers.push(`No answers available for this question.`);
+
+            // Handle unsupported question types
+            else {
+                correctAnswers.push(`Unsupported question type: ${question.type}`);
+            }
         });
 
         return correctAnswers;
     }
+
+
 
     function checkForStoredStructure(responseText) {
         try {
@@ -44,8 +161,10 @@
                 let match = responseText.match(regex);
                 if (match && match[1]) {
                     let storedStructure = JSON.parse(match[1]);
+                    currentStoredStructure = storedStructure
                     storedAnswers = extractCorrectAnswers(storedStructure);
-                    updateFloatingWindowContent(); // Update window content with new answers
+                    updateData(storedStructure);
+                    updateFloatingWindowContent();
                 }
             }
         } catch (error) {
@@ -53,7 +172,6 @@
         }
     }
 
-    // Intercept XMLHttpRequests
     (function(open) {
         XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
             this.addEventListener('load', function() {
@@ -63,7 +181,6 @@
         };
     })(XMLHttpRequest.prototype.open);
 
-    // Intercept fetch requests
     (function(fetch) {
         window.fetch = function() {
             return fetch.apply(this, arguments).then(response => {
@@ -76,7 +193,6 @@
 
     function createOrUpdateFloatingWindow() {
         if (floatingWindow) {
-            // If the window already exists, just update its content
             updateFloatingWindowContent();
             return;
         }
@@ -181,7 +297,7 @@
         const contentArea = floatingWindow.querySelector('div:nth-child(2)');
         const loadingSpinner = document.getElementById('loadingSpinner');
 
-        contentArea.innerHTML = ''; // Clear existing content
+        contentArea.innerHTML = '';
         const answersList = document.createElement('ul');
         storedAnswers.forEach(answer => {
             const listItem = document.createElement('li');
@@ -203,6 +319,7 @@
         let startX, startY;
 
         element.addEventListener('mousedown', function(e) {
+            autoAnswer()
             isDragging = true;
             startX = e.clientX - element.offsetLeft;
             startY = e.clientY - element.offsetTop;
@@ -220,13 +337,10 @@
         });
     }
 
-    
-    
-    // Function to prompt for product key and validate it
+
     function promptForProductKey() {
         const productKey = prompt("Please enter your product key (format: xxxx-xxxx-xxxx-xxxx):");
         if (productKey) {
-            // Remove hyphens and check the length
             const sanitizedKey = productKey.replace(/-/g, '');
             if (sanitizedKey.length === 16) {
                 validateProductKey(sanitizedKey);
@@ -239,7 +353,6 @@
         }
     }
 
-    // Function to validate product key
     function validateProductKey(productKey) {
         fetch('https://api.n3r0.tech:3000/validate-key', {
             method: 'POST',
@@ -266,7 +379,6 @@
         });
     }
 
-    // Function to check for saved product key and validate it
     function checkForSavedProductKey() {
         const savedProductKey = localStorage.getItem('productKey');
         if (savedProductKey) {
@@ -276,23 +388,21 @@
         }
     }
 
-    // Call the check function when the script loads
     checkForSavedProductKey();
 
-    // Throttled function to update content
     function throttledUpdate() {
         if (updateTimeout) clearTimeout(updateTimeout);
         updateTimeout = setTimeout(() => {
             updateFloatingWindowContent();
-        }, 200); // Adjust the delay as needed
+        }, 200);
     }
 
-    // Detect page changes using a MutationObserver
     const observer = new MutationObserver(() => {
-        throttledUpdate(); // Use throttled update instead of direct call
+        throttledUpdate();
+        extractFlashcardQuestion();
     });
 
-    observer.observe(document.querySelector('main'), { // Adjust selector to observe only necessary parts
+    observer.observe(document.body, {
         childList: true,
         subtree: true
     });
