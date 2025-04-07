@@ -1,195 +1,212 @@
-
-// ==UserScript==
-// @name        N3r0 Dev Build
+-// ==UserScript==
+// @name        N3r0 Performance Test
 // @namespace   http://n3r0.tech/
-// @version     1.25
+// @version     1.0
 // @description Kun et vaan jaksaisi koulua
 // @author      You
 // @match       *://materiaalit.otava.fi/*
 // @grant       none
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
-    if (window.self !== window.top) {
-        return;
-    }
 
+    // Ensure script runs only in the top window
+    if (window.self !== window.top) return;
+
+    // Global state variables
     let storedAnswers = [];
+    let currentSectionIds = [];
     let floatingWindow = null;
     let updateTimeout = null;
     let currentFlashcardQuestion = null;
     let currentStoredStructure = null;
-    let sectionIds = [];
-
     let currentTaskId = null;
+    let currentMaterialUuid = null;
+    let currentMaterialId = null;
+    let currentPage = null;
+    let currentPageUuid = null;
+    let currentQuestionIds = [];
+    let currentMaxScore = null;
 
+    // Constants
+    const API_BASE_URL = "https://materiaalit.otava.fi/o/task-container/a/";
+    const INPUT_FIELD_SELECTOR = 'input, textarea, [aria-label]';
+    const FLASHCARD_CONTAINER_SELECTOR = '.flashcards';
+    const FLASHCARD_QUESTION_SELECTOR = '#question-Q_1424 > div.content-view-wrapper > div > div:nth-child(2) > div.flashcards-term > div > div > div';
 
+    // Utility Functions
+    function logError(error, context = '') {
+        console.error(`Error in ${context}:`, error);
+        showNotification('DEBUG', `Error in ${context}`, 3000)
+    }
+
+    function debounce(func, delay) {
+        return function (...args) {
+            if (updateTimeout) clearTimeout(updateTimeout);
+            updateTimeout = setTimeout(() => func.apply(this, args), delay);
+        };
+    }
+
+    // DOM Interaction Functions
+    // Needs to be rewritten but works for most cases.
     function findInputFields() {
-        console.log("searching")
-        let fields = []
-        let inputs = window.top.document.querySelector('iframe').contentDocument.querySelectorAll('input, textarea, [aria-label]');
-
-        inputs.forEach(input => {
-            if (input.getAttribute('aria-label') === 'Kirjoita vastaus') {
-                console.log('Found input:', input);
-                fields.push(input);
-            }
-        });
-        return fields;
-    }
-
-    function updateData(storedStructure) {
-        let metadata = storedStructure.structure.metadata
-        currentTaskId = metadata.taskId
-
-    }
-
-    function apiHandler(type, answer, sectionId) {
-        if (type === "structure-answer") {
-            fetch("https://materiaalit.otava.fi/o/task-container/a/" + currentTaskId + "/-/structure-answer", {
-                "headers": {
-                    "accept": "application/json, text/javascript, */*; q=0.01",
-                    "accept-language": "fi-FI,fi;q=0.9,en-US;q=0.8,en;q=0.7",
-                    "cache-control": "no-cache",
-                    "content-type": "application/json; charset=UTF-8",
-                    "pragma": "no-cache",
-                    "priority": "u=1, i",
-                    "sec-ch-ua": "\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"127\", \"Chromium\";v=\"127\"",
-                    "sec-ch-ua-mobile": "?0",
-                    "sec-ch-ua-platform": "\"Linux\"",
-                    "sec-fetch-dest": "empty",
-                    "sec-fetch-mode": "cors",
-                    "sec-fetch-site": "same-origin",
-                    "x-csrf-token": "v4030WaqmcB27p1m",
-                    "x-requested-with": "XMLHttpRequest"
-                },
-                "referrer": "https://materiaalit.otava.fi/web/state-jurdsmbsga2celcpge/6107da4397dcff07e8e24e21",
-                "referrerPolicy": "strict-origin-when-cross-origin",
-                "body": "{\"questionId\":\"Q_64\",\"sectionId\":\""+ sectionId +"\",\"answer\":[\"" + answer + "\"],\"score\":0,\"graded\":1,\"materialId\":\"90204\",\"materialUuid\":\"5f8eda9b2c6196729023f81f\",\"page\":\"6107da4397dcff07e8e24e21\",\"pageUuid\":\"6087422edfa20c5a02dc7247\"}",
-                "method": "POST",
-                "mode": "cors",
-                "credentials": "include"
-            });
-        }
-    }
-
-    function autoAnswer() {
-        let inputFields = findInputFields();
-        if (inputFields) {
-            for (var i = 0; i < inputFields.length; i++) {
-                inputFields[i].value = storedAnswers[i]
-                apiHandler("structure-answer", storedAnswers[i], sectionIds[i])
-            }
-        }
+        const iframeDocument = window.top.document.querySelector('iframe').contentDocument;
+        const inputs = iframeDocument.querySelectorAll(INPUT_FIELD_SELECTOR);
+        return Array.from(inputs).filter(input =>
+            input.getAttribute('aria-label') === 'Kirjoita vastaus' ||
+            input.getAttribute('aria-label') === 'Write your answer'
+        );
     }
 
     function extractFlashcardQuestion() {
-        // Check if the question type is flashcards
-        const flashcardContainer = window.top.document.querySelector('iframe').contentDocument.querySelector('.flashcards');
-        if (!flashcardContainer) return;
-        console.log("Extracting flashcard questions")
-        // Find the flashcard question inside the paragraph
-        const flashcardQuestion = window.top.document.querySelector('iframe').contentDocument.querySelector("#question-Q_1424 > div.content-view-wrapper > div > div:nth-child(2) > div.flashcards-term > div > div > div")
-        console.log('Current Flashcard Question:', flashcardQuestion.innerText);
-        if (currentFlashcardQuestion !== flashcardQuestion.innerText) {
-            currentFlashcardQuestion = flashcardQuestion.innerText
+        try {
+            const iframeDocument = window.top.document.querySelector('iframe').contentDocument;
+            const flashcardContainer = iframeDocument.querySelector(FLASHCARD_CONTAINER_SELECTOR);
+            if (!flashcardContainer) return;
+
+            const flashcardQuestion = iframeDocument.querySelector(FLASHCARD_QUESTION_SELECTOR);
+            if (flashcardQuestion && currentFlashcardQuestion !== flashcardQuestion.innerText) {
+                currentFlashcardQuestion = flashcardQuestion.innerText;
+                storedAnswers = extractCorrectAnswers(currentStoredStructure);
+            }
+        } catch(error) {
+            console.log("Failed to extract flashcard question: "+error)
         }
-        storedAnswers = extractCorrectAnswers(currentStoredStructure)
+    }
+
+    // API Methods
+    async function apiHandler(type, answer, sectionId) {
+        const url = type === "structure-answer"
+            ? `${API_BASE_URL}${currentTaskId}/-/structure-answer`
+            : `${API_BASE_URL}${currentTaskId}/-/score`;
+
+        const body = type === "structure-answer"
+            ? JSON.stringify({
+                questionId: currentQuestionIds[0],
+                sectionId: sectionId,
+                answer: [answer],
+                score: 0,
+                graded: 1,
+                materialId: currentMaterialId,
+                materialUuid: currentMaterialUuid,
+                page: currentPage,
+                pageUuid: currentPageUuid
+            })
+            : JSON.stringify({
+                score: currentMaxScore,
+                progressMeasure: 1,
+                scoreMax: currentMaxScore,
+                materialId: currentMaterialId,
+                materialUuid: currentMaterialUuid,
+                page: currentPage,
+                pageUuid: currentPageUuid
+            });
+
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
+                body: body
+            });
+            if (!response.ok) throw new Error(`API request failed: ${response.statusText}`);
+        } catch (error) {
+            logError(error, 'apiHandler');
+        }
     }
 
     function extractCorrectAnswers(storedStructure) {
-        console.log(storedStructure);
+        if (!storedStructure || !storedStructure.structure || !storedStructure.structure.questions) {
+            logError('Invalid storedStructure', 'extractCorrectAnswers');
+            return [];
+        }
+
         const questions = storedStructure.structure.questions;
         const correctAnswers = [];
-        sectionIds = [];
+        const sectionIds = [];
 
         questions.forEach(question => {
-            console.log(question.type);
+            currentQuestionIds.push(question.id);
 
-            // Check for 'fillintheblank' type questions
-            if (question.type === "fillintheblank" || question.type === "multiplechoice") {
-                question.sections.forEach(section => {
-                    let correctChoice = null;
-                    let maxPoints = -1;
+            // These could be handled differently
+            if (question.type === 'open' && question.exampleAnswer?.medias?.length > 0) {
+                const exampleText = question.exampleAnswer.medias[0].content.text;
+                correctAnswers.push(exampleText.trim());
+            }
 
-                    sectionIds.push(section.id)
-
-                    section.choices.forEach(choice => {
-                        // Find the choice with the highest points
-                        if (choice.points > maxPoints) {
-                            maxPoints = choice.points;
-                            correctChoice = choice.name;
-                        }
+            if (question.type === 'crossword') {
+                if (question.sections) {
+                    question.sections.forEach(section => {
+                        sectionIds.push(section.id);
+                        correctAnswers.push(section.word);
                     });
-
-                    if (correctChoice) {
-                        correctAnswers.push(correctChoice);
-                    }
-                });
-            }
-
-            // Check for 'flashcards' type questions
-            else if (question.type == "flashcards") {
-                question.sections.forEach(section => {
-                    if (section.name === currentFlashcardQuestion) {
-                        section.choices.forEach(choice => {
-                            console.log("Correct: " + choice.name)
-                            correctAnswers.push(choice.name);
-                        });
-                    }
-                });
-            }
-
-            else if (question.type === "open") return correctAnswers.push(`No answers available for this question.`);
-
-            // Handle unsupported question types
-            else {
-                correctAnswers.push(`Unsupported question type: ${question.type}`);
+                }
+            } else if (question.type === 'markthewords') {
+                if (question.sections) {
+                    question.sections.forEach(section => {
+                        sectionIds.push(section.id);
+                        const correctChoices = section.choices
+                        .filter(choice => choice.points > 0)
+                        .map(choice => choice.name);
+                        correctAnswers.push(...correctChoices);
+                    });
+                }
+            } else {
+                if (question.sections) {
+                    question.sections.forEach(section => {
+                        sectionIds.push(section.id);
+                        const correctChoices = section.choices
+                        .filter(choice => choice.points > 0)
+                        .map(choice => choice.name);
+                        correctAnswers.push(...correctChoices);
+                    });
+                }
             }
         });
+
+        console.log("QIDS: "+sectionIds)
+
+        currentSectionIds = sectionIds
 
         return correctAnswers;
     }
 
 
-
-    function checkForStoredStructure(responseText) {
+    function extractData(responseText) {
         try {
-            if (responseText.includes('storedStructure')) {
-                let regex = /var storedStructure = (\{.*?\});/;
-                let match = responseText.match(regex);
-                if (match && match[1]) {
-                    let storedStructure = JSON.parse(match[1]);
-                    currentStoredStructure = storedStructure
-                    storedAnswers = extractCorrectAnswers(storedStructure);
-                    updateData(storedStructure);
-                    updateFloatingWindowContent();
-                }
+            const storedStructureMatch = responseText.match(/var storedStructure = (\{.*?\});/);
+            if (storedStructureMatch) {
+                currentStoredStructure = JSON.parse(storedStructureMatch[1]);
+                storedAnswers = extractCorrectAnswers(currentStoredStructure);
+                updateFloatingWindowContent();
             }
+
+            const taskIdMatch = responseText.match(/var taskId = '([^']+)';/);
+            if (taskIdMatch) currentTaskId = taskIdMatch[1];
+
+            const currentMaterialMatch = responseText.match(/Cloubi\.currentMaterial\s*=\s*(\{[\s\S]*?\})/);
+            if (currentMaterialMatch) {
+                const jsonString = currentMaterialMatch[1].trim().replace(/;$/, '');
+                const currentMaterial = JSON.parse(jsonString);
+                currentMaterialUuid = currentMaterial.uuid;
+                console.log("MaterialUUID: "+currentMaterialUuid)
+            }
+
+            const materialIdMatch = responseText.match(/"materialId":\s*"(\d+)"/);
+            if (materialIdMatch) currentMaterialId = materialIdMatch[1];
+
+            const pageUuidMatch = responseText.match(/"uuid"\s*:\s*"([a-f0-9]{24})"/);
+            if (pageUuidMatch) currentPageUuid = pageUuidMatch[1];
+
+            const pageIdMatch = window.location.href.match(/\/([^\/]+)$/);
+            if (pageIdMatch) currentPage = pageIdMatch[1];
         } catch (error) {
-            console.error('Error parsing storedStructure:', error);
+            logError(error, 'extractData');
         }
     }
-
-    (function(open) {
-        XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
-            this.addEventListener('load', function() {
-                checkForStoredStructure(this.responseText);
-            });
-            open.call(this, method, url, async, user, pass);
-        };
-    })(XMLHttpRequest.prototype.open);
-
-    (function(fetch) {
-        window.fetch = function() {
-            return fetch.apply(this, arguments).then(response => {
-                const clonedResponse = response.clone();
-                clonedResponse.text().then(responseText => checkForStoredStructure(responseText));
-                return response;
-            });
-        };
-    })(window.fetch);
 
     function createOrUpdateFloatingWindow() {
         if (floatingWindow) {
@@ -199,112 +216,317 @@
 
         floatingWindow = document.createElement('div');
         floatingWindow.id = 'floatingWindow';
-        floatingWindow.style.position = 'fixed';
-        floatingWindow.style.width = '250px';
-        floatingWindow.style.height = '300px';
-        floatingWindow.style.top = '20px';
-        floatingWindow.style.left = '20px';
-        floatingWindow.style.backgroundColor = '#333';
-        floatingWindow.style.color = '#fff';
-        floatingWindow.style.border = '1px solid #000';
-        floatingWindow.style.borderRadius = '10px';
-        floatingWindow.style.zIndex = '10000';
-        floatingWindow.style.cursor = 'move';
-        floatingWindow.style.fontFamily = 'Manrope, sans-serif';
-        floatingWindow.style.overflow = 'hidden';
-        floatingWindow.style.boxSizing = 'border-box';
+        Object.assign(floatingWindow.style, {
+            position: 'fixed',
+            width: '400px',
+            height: '350px',
+            top: '20px',
+            left: '20px',
+            backgroundColor: '#333',
+            color: '#fff',
+            border: '1px solid #000',
+            borderRadius: '10px',
+            zIndex: '10000',
+            cursor: 'move',
+            fontFamily: 'Manrope, sans-serif',
+            overflow: 'hidden',
+            boxSizing: 'border-box',
+            display: 'flex',
+            flexDirection: 'column'
+        });
 
         const topBar = document.createElement('div');
-        topBar.style.backgroundColor = '#222';
-        topBar.style.padding = '5px';
-        topBar.style.height = '30px';
-        topBar.style.display = 'flex';
-        topBar.style.justifyContent = 'space-between';
-        topBar.style.alignItems = 'center';
+        Object.assign(topBar.style, {
+            backgroundColor: '#222',
+            padding: '5px',
+            height: '30px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexShrink: '0'
+        });
 
         const title = document.createElement('span');
-        title.textContent = 'N3r0';
-        title.style.fontWeight = '800';
-        title.style.fontSize = '18px';
-        title.style.background = 'radial-gradient(circle at 100%, #b2a8fd, #8678f9 50%, #c7d2fe 75%, #9a8dfd 75%)';
-        title.style.backgroundSize = '200% auto';
-        title.style.color = '#000';
-        title.style.backgroundClip = 'text';
-        title.style.webkitTextFillColor = 'transparent';
-        title.style.animation = 'animatedTextGradient 1.5s linear infinite';
-        topBar.appendChild(title);
+        title.textContent = 'N3R0';
+        Object.assign(title.style, {
+            fontWeight: '800',
+            fontSize: '18px',
+            background: 'radial-gradient(circle at 100%, #b2a8fd, #8678f9 50%, #c7d2fe 75%, #9a8dfd 75%)',
+            backgroundSize: '200% auto',
+            color: '#000',
+            backgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            animation: 'animatedTextGradient 1.5s linear infinite'
+        });
 
         const closeButton = document.createElement('button');
         closeButton.textContent = 'X';
-        closeButton.style.marginLeft = 'auto';
-        closeButton.style.backgroundColor = '#ff4d4d';
-        closeButton.style.border = 'none';
-        closeButton.style.color = '#fff';
-        closeButton.style.cursor = 'pointer';
+        Object.assign(closeButton.style, {
+            marginLeft: 'auto',
+            backgroundColor: '#ff4d4d',
+            border: 'none',
+            borderRadius: '15px',
+            color: '#fff',
+            cursor: 'pointer'
+        });
         closeButton.onclick = removeFloatingWindow;
-        topBar.appendChild(closeButton);
 
+        topBar.appendChild(title);
+        topBar.appendChild(closeButton);
         floatingWindow.appendChild(topBar);
 
-        const contentArea = document.createElement('div');
-        contentArea.style.padding = '10px';
-        contentArea.style.overflowY = 'auto';
-        contentArea.style.height = 'calc(100% - 30px)';
-        contentArea.style.position = 'relative';
-        floatingWindow.appendChild(contentArea);
+        const mainContainer = document.createElement('div');
+        Object.assign(mainContainer.style, {
+            display: 'flex',
+            flex: '1',
+            overflow: 'hidden'
+        });
 
-        const loadingSpinner = document.createElement('div');
-        loadingSpinner.id = 'loadingSpinner';
-        loadingSpinner.style.border = '4px solid #f3f3f3';
-        loadingSpinner.style.borderTop = '4px solid #b2a8fd';
-        loadingSpinner.style.borderRadius = '50%';
-        loadingSpinner.style.width = '24px';
-        loadingSpinner.style.height = '24px';
-        loadingSpinner.style.animation = 'spin 1s linear infinite';
-        loadingSpinner.style.position = 'absolute';
-        loadingSpinner.style.left = '50%';
-        loadingSpinner.style.top = '50%';
-        loadingSpinner.style.transform = 'translate(-50%, -50%)';
+        const answersContainer = document.createElement('div');
+        answersContainer.id = 'answersContainer';
+        Object.assign(answersContainer.style, {
+            flex: '2',
+            padding: '10px',
+            overflowY: 'auto',
+            backgroundColor: '#2b2b2b',
+            borderRight: '1px solid #444',
+            height: '100%'
+        });
 
-        contentArea.appendChild(loadingSpinner);
+        const buttonsContainer = document.createElement('div');
+        buttonsContainer.id = 'buttonsContainer';
+        Object.assign(buttonsContainer.style, {
+            flex: '1',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: '#222',
+            padding: '10px',
+            height: '100%',
+            flexShrink: '0'
+        });
 
+        const autoAnswerButton = document.createElement('button');
+        autoAnswerButton.textContent = 'Auto Answer';
+        Object.assign(autoAnswerButton.style, {
+            width: '100%',
+            padding: '8px',
+            backgroundColor: '#4CAF50',
+            color: '#fff',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            borderRadius: '5px',
+            marginBottom: '5px'
+        });
+        autoAnswerButton.onclick = autoAnswer;
+
+        const placeholderButton = document.createElement('button');
+        placeholderButton.textContent = 'Placeholder';
+        Object.assign(placeholderButton.style, {
+            width: '100%',
+            padding: '8px',
+            backgroundColor: '#555',
+            color: '#fff',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '14px',
+            fontWeight: 'bold',
+            borderRadius: '5px'
+        });
+
+        buttonsContainer.appendChild(autoAnswerButton);
+        buttonsContainer.appendChild(placeholderButton);
+
+        const navContainer = document.createElement('div');
+        Object.assign(navContainer.style, {
+            width: '40px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            backgroundColor: '#1a1a1a',
+            borderLeft: '1px solid #444',
+            paddingTop: '10px'
+        });
+
+        const navButton1 = document.createElement('div');
+        navButton1.textContent = '☰';
+        Object.assign(navButton1.style, {
+            cursor: 'pointer',
+            padding: '10px',
+            color: '#fff',
+            fontSize: '18px'
+        });
+        navButton1.onclick = () => switchTab('answers');
+
+        const navButton2 = document.createElement('div');
+        navButton2.textContent = '⚙️';
+        Object.assign(navButton2.style, {
+            cursor: 'pointer',
+            padding: '10px',
+            color: '#fff',
+            fontSize: '18px'
+        });
+        navButton2.onclick = () => switchTab('settings');
+
+        navContainer.appendChild(navButton1);
+        navContainer.appendChild(navButton2);
+
+        mainContainer.appendChild(answersContainer);
+        mainContainer.appendChild(buttonsContainer);
+        mainContainer.appendChild(navContainer);
+
+        floatingWindow.appendChild(mainContainer);
         document.body.appendChild(floatingWindow);
 
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes animatedTextGradient {
-                to {
-                    background-position: 200% center;
-                }
-            }
-            @keyframes spin {
-                0% { transform: translate(-50%, -50%) rotate(0deg); }
-                100% { transform: translate(-50%, -50%) rotate(360deg); }
-            }
-        `;
-        document.head.appendChild(style);
-
-        const fontLink = document.createElement('link');
-        fontLink.rel = 'stylesheet';
-        fontLink.href = 'https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;800&display=swap';
-        document.head.appendChild(fontLink);
-
         makeElementDraggable(floatingWindow);
+
+        const notificationContainer = document.createElement('div');
+        notificationContainer.id = 'notification-container';
+        Object.assign(notificationContainer.style, {
+            position: 'fixed',
+            bottom: '20px',
+            right: '20px',
+            width: '300px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '10px',
+            zIndex: '10000',
+            pointerEvents: 'none'
+        });
+        document.body.appendChild(notificationContainer);
+
+        function showNotification(title, message, duration = 3000) {
+            const notification = document.createElement('div');
+            Object.assign(notification.style, {
+                backgroundColor: '#222',
+                color: '#fff',
+                padding: '15px',
+                borderRadius: '8px',
+                boxShadow: '0 4px 10px rgba(0, 0, 0, 0.3)',
+                opacity: '0',
+                transform: 'translateY(10px)',
+                transition: 'opacity 0.3s ease-out, transform 0.3s ease-out',
+                fontFamily: 'Manrope, sans-serif',
+                pointerEvents: 'auto'
+            });
+
+            const titleElem = document.createElement('strong');
+            titleElem.textContent = title;
+            titleElem.style.display = 'block';
+
+            const messageElem = document.createElement('span');
+            messageElem.textContent = message;
+
+            notification.appendChild(titleElem);
+            notification.appendChild(messageElem);
+            notificationContainer.appendChild(notification);
+
+            requestAnimationFrame(() => {
+                notification.style.opacity = '1';
+                notification.style.transform = 'translateY(0)';
+            });
+
+            setTimeout(() => {
+                notification.style.opacity = '0';
+                notification.style.transform = 'translateY(-10px)';
+                setTimeout(() => {
+                    notification.remove();
+                }, 300);
+            }, duration);
+        }
+
+        setTimeout(() => showNotification('Success', 'Notification system loaded!', 3000), 500);
+
+        window.showNotification = showNotification;
+
+        window.mainContainer = mainContainer;
+    }
+
+    function switchTab(tabName) {
+        const answersContainer = document.getElementById('answersContainer');
+        const buttonsContainer = document.getElementById('buttonsContainer');
+        const settingsContainer = document.getElementById('settingsContainer');
+
+        if (tabName === 'answers') {
+            answersContainer.style.display = 'block';
+            buttonsContainer.style.display = 'flex';
+            if (settingsContainer) settingsContainer.style.display = 'none';
+        } else if (tabName === 'settings') {
+            answersContainer.style.display = 'none';
+            buttonsContainer.style.display = 'none';
+
+            if (!settingsContainer) {
+                const settingsContainer = document.createElement('div');
+                settingsContainer.id = 'settingsContainer';
+                Object.assign(settingsContainer.style, {
+                    flex: '2',
+                    padding: '10px',
+                    overflowY: 'auto',
+                    backgroundColor: '#222',
+                    borderRight: '1px solid #444',
+                    height: '100%'
+                });
+
+                const storedStructureButton = document.createElement('button');
+                storedStructureButton.textContent = 'Copy StoredStructure as JSON';
+                Object.assign(storedStructureButton.style, {
+                    width: '100%',
+                    padding: '8px',
+                    backgroundColor: '#555',
+                    color: '#fff',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    borderRadius: '5px'
+                });
+                storedStructureButton.onclick = () => navigator.clipboard.writeText(JSON.stringify(currentStoredStructure)).then(() => {alert("Copied to clipboard!")}).catch((error) => {logError(error)})
+
+                const credits = document.createElement('div');
+                credits.textContent = 'Developed by JonaPoka';
+                Object.assign(credits.style, {
+                    textAlign: 'center',
+                    padding: '10px',
+                    top: '90%',
+                    color: '#fff',
+                    fontSize: '12px',
+                    borderTop: '1px solid #444',
+                    marginTop: 'auto'
+                });
+
+                settingsContainer.appendChild(storedStructureButton);
+
+                settingsContainer.appendChild(credits);
+
+                window.mainContainer.insertBefore(settingsContainer, mainContainer.children[1]);
+            } else {
+                settingsContainer.style.display = 'block';
+            }
+        }
     }
 
     function updateFloatingWindowContent() {
-        if (!floatingWindow) return; // Ensure the window exists before updating
-        const contentArea = floatingWindow.querySelector('div:nth-child(2)');
-        const loadingSpinner = document.getElementById('loadingSpinner');
+        if (!floatingWindow) return;
 
-        contentArea.innerHTML = '';
+        const answersContainer = document.getElementById('answersContainer');
+        if (!answersContainer) {
+            logError('Answers container not found in floating window.', 'updateFloatingWindowContent');
+            return;
+        }
+        answersContainer.innerHTML = '';
+
         const answersList = document.createElement('ul');
         storedAnswers.forEach(answer => {
+            console.log("Answer: "+answer)
             const listItem = document.createElement('li');
             listItem.textContent = answer;
             answersList.appendChild(listItem);
         });
-        contentArea.appendChild(answersList);
+
+        answersContainer.appendChild(answersList);
     }
 
     function removeFloatingWindow() {
@@ -318,25 +540,31 @@
         let isDragging = false;
         let startX, startY;
 
-        element.addEventListener('mousedown', function(e) {
-            autoAnswer()
+        element.addEventListener('mousedown', (e) => {
             isDragging = true;
             startX = e.clientX - element.offsetLeft;
             startY = e.clientY - element.offsetTop;
         });
 
-        document.addEventListener('mousemove', function(e) {
+        document.addEventListener('mousemove', (e) => {
             if (isDragging) {
                 element.style.left = `${e.clientX - startX}px`;
                 element.style.top = `${e.clientY - startY}px`;
             }
         });
 
-        document.addEventListener('mouseup', function() {
+        document.addEventListener('mouseup', () => {
             isDragging = false;
         });
     }
 
+    function autoAnswer() {
+        for (var i = 0; i < storedAnswers.length; i++) {
+            console.log(currentSectionIds)
+            apiHandler("structure-answer", storedAnswers[i], currentSectionIds[i])
+        }
+        apiHandler("score", null, null)
+    }
 
     function promptForProductKey() {
         const productKey = prompt("Please enter your product key (format: xxxx-xxxx-xxxx-xxxx):");
@@ -354,29 +582,11 @@
     }
 
     function validateProductKey(productKey) {
-        fetch('https://api.n3r0.tech:3000/validate-key', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ key: productKey })
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.valid) {
-                // Save the product key to localStorage
-                localStorage.setItem('productKey', productKey);
-                // Proceed with the program
-                createOrUpdateFloatingWindow();
-            } else {
-                alert("Invalid product key. Please try again.");
-                promptForProductKey();
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert("An error occurred while validating the product key.");
-        });
+        localStorage.setItem('productKey', productKey);
+
+        // Product key validation methods removed for security purposes. Validates any code.
+
+        createOrUpdateFloatingWindow();
     }
 
     function checkForSavedProductKey() {
@@ -388,24 +598,45 @@
         }
     }
 
-    checkForSavedProductKey();
-
-    function throttledUpdate() {
-        if (updateTimeout) clearTimeout(updateTimeout);
-        updateTimeout = setTimeout(() => {
-            updateFloatingWindowContent();
-        }, 200);
+    function fetchPageSource() {
+        fetch(window.location.href)
+            .then(response => response.text())
+            .then(html => {
+            extractData(html);
+        })
+            .catch(error => logError(error, 'fetchPageSource'));
     }
 
-    const observer = new MutationObserver(() => {
-        throttledUpdate();
-        extractFlashcardQuestion();
-    });
+    (function(open) {
+        XMLHttpRequest.prototype.open = function(method, url, async, user, pass) {
+            this.addEventListener('load', function() {
+                extractData(this.responseText);
+                fetchPageSource()
+            });
+            open.call(this, method, url, async, user, pass);
+        };
+    })(XMLHttpRequest.prototype.open);
 
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true
-    });
+    (function(fetch) {
+        window.fetch = function() {
+            return fetch.apply(this, arguments).then(response => {
+                const clonedResponse = response.clone();
+                clonedResponse.text().then(responseText => extractData(responseText));
+                return response;
+            });
+        };
+    })(window.fetch);
+
+    // Initialization
+    checkForSavedProductKey();
+
+    const throttledUpdate = debounce(() => {
+        updateFloatingWindowContent();
+        extractFlashcardQuestion();
+    }, 200);
+
+    const observer = new MutationObserver(throttledUpdate);
+    observer.observe(document.body, { childList: true, subtree: true });
 
     window.addEventListener('popstate', throttledUpdate);
 })();
