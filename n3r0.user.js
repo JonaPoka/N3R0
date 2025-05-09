@@ -49,7 +49,6 @@
     }
 
     // DOM Interaction Functions
-    // Needs to be rewritten but works for most cases.
     function findInputFields() {
         const iframeDocument = window.top.document.querySelector('iframe').contentDocument;
         const inputs = iframeDocument.querySelectorAll(INPUT_FIELD_SELECTOR);
@@ -75,7 +74,7 @@
         }
     }
 
-    // API Methods
+    // API Interaction Functions
     async function apiHandler(type, answer, sectionId) {
         const url = type === "structure-answer"
             ? `${API_BASE_URL}${currentTaskId}/-/structure-answer`
@@ -640,3 +639,4 @@
 
     window.addEventListener('popstate', throttledUpdate);
 })();
+
