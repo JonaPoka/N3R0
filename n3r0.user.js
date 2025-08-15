@@ -6,6 +6,7 @@
 // @author      You
 // @match       *://materiaalit.otava.fi/*
 // @grant       none
+// @run-at      document-idle
 // ==/UserScript==
 
 (function () {
@@ -19,6 +20,7 @@
     let currentSectionIds = [];
     let floatingWindow = null;
     let updateTimeout = null;
+    let currentQuestionTypes = [];
     let currentFlashcardQuestion = null;
     let currentStoredStructure = null;
     let currentTaskId = null;
@@ -117,6 +119,32 @@
         }
     }
 
+    function stripHtmlToText(html) {
+        // 1. Turn block-level tags into newlines
+        html = html.replace(/<\s*\/?(div|p|h[1-6]|li|br)[^>]*>/gi, '\n');
+
+        // 2. Remove all other tags
+        html = html.replace(/<[^>]+>/g, '');
+
+        // 3. Decode a few common HTML entities
+        html = html
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
+
+        // 4. Normalize whitespace and collapse multiple newlines
+        html = html
+            .replace(/\r\n|\r/g, '\n')       // unify newlines
+            .replace(/\n[ \t]*\n+/g, '\n\n') // collapse multiple blank lines
+            .replace(/[ \t]+/g, ' ')         // collapse spaces/tabs
+            .trim();
+
+        return html;
+    }
+
     function extractCorrectAnswers(storedStructure) {
         if (!storedStructure || !storedStructure.structure || !storedStructure.structure.questions) {
             logError('Invalid storedStructure', 'extractCorrectAnswers');
@@ -129,11 +157,12 @@
 
         questions.forEach(question => {
             currentQuestionIds.push(question.id);
+            currentQuestionTypes.push(question.type);
 
             // These could be handled differently
             if (question.type === 'open' && question.exampleAnswer?.medias?.length > 0) {
                 const exampleText = question.exampleAnswer.medias[0].content.text;
-                correctAnswers.push(exampleText.trim());
+                correctAnswers.push(stripHtmlToText(exampleText));
             }
 
             if (question.type === 'crossword') {
@@ -207,6 +236,17 @@
         }
     }
 
+    function monitorFloatingWindow() {
+        setInterval(() => {
+            // if window is gone or detached from DOM → restore
+            if (!floatingWindow || !document.body.contains(floatingWindow)) {
+                console.warn("Floating window missing, restoring...");
+                createOrUpdateFloatingWindow();
+            }
+        }, 1000); // check every second
+    }
+
+
     function createOrUpdateFloatingWindow() {
         if (floatingWindow) {
             updateFloatingWindowContent();
@@ -266,12 +306,32 @@
             border: 'none',
             borderRadius: '15px',
             color: '#fff',
-            cursor: 'pointer'
+            cursor: 'pointer',
+            padding: '0 8px'
         });
         closeButton.onclick = removeFloatingWindow;
 
+        const minimizeButton = document.createElement('button');
+        minimizeButton.textContent = '–';
+        Object.assign(minimizeButton.style, {
+            marginLeft: '75%',
+            backgroundColor: '#ffaa00',
+            border: 'none',
+            borderRadius: '15px',
+            color: '#fff',
+            cursor: 'pointer',
+            padding: '0 8px'
+        });
+        minimizeButton.onclick = () => {
+            floatingWindow.style.display = 'none';
+            createRestoreButton();
+        };
+
+
         topBar.appendChild(title);
+        topBar.appendChild(minimizeButton);
         topBar.appendChild(closeButton);
+
         floatingWindow.appendChild(topBar);
 
         const mainContainer = document.createElement('div');
@@ -397,6 +457,15 @@
         });
         document.body.appendChild(notificationContainer);
 
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes animatedTextGradient {
+                0% { background-position: 0% 0%; }
+                100% { background-position: 200% 0%; }
+            }
+`       ;
+        document.head.appendChild(style);
+
         function showNotification(title, message, duration = 3000) {
             const notification = document.createElement('div');
             Object.assign(notification.style, {
@@ -442,6 +511,36 @@
         window.showNotification = showNotification;
 
         window.mainContainer = mainContainer;
+
+    }
+
+    function createRestoreButton() {
+        const existingRestore = document.getElementById('restoreFloatingWindowBtn');
+        if (existingRestore) return;
+
+        const restoreBtn = document.createElement('button');
+        restoreBtn.id = 'restoreFloatingWindowBtn';
+        restoreBtn.textContent = 'Open N3R0';
+        Object.assign(restoreBtn.style, {
+            position: 'fixed',
+            bottom: '20px',
+            left: '20px',
+            backgroundColor: '#4CAF50',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '5px',
+            padding: '8px 12px',
+            cursor: 'pointer',
+            zIndex: '10001',
+            fontFamily: 'Manrope, sans-serif'
+        });
+
+        restoreBtn.onclick = () => {
+            floatingWindow.style.display = 'flex';
+            restoreBtn.remove();
+        };
+
+        document.body.appendChild(restoreBtn);
     }
 
     function switchTab(tabName) {
@@ -484,6 +583,35 @@
                 });
                 storedStructureButton.onclick = () => navigator.clipboard.writeText(JSON.stringify(currentStoredStructure)).then(() => {alert("Copied to clipboard!")}).catch((error) => {logError(error)})
 
+
+                const pageSourceButton = document.createElement('button');
+                pageSourceButton.textContent = 'Copy Page Source as JSON';
+                Object.assign(pageSourceButton.style, {
+                    width: '100%',
+                    padding: '8px',
+                    backgroundColor: '#555',
+                    color: '#fff',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                    fontWeight: 'bold',
+                    borderRadius: '5px'
+                });
+                pageSourceButton.onclick = () => navigator.clipboard.writeText(JSON.stringify(fetchPageSource())).then(() => {alert("Copied to clipboard!")}).catch((error) => {logError(error)})
+
+                const currentTypeDebug = document.createElement('div');
+                currentTypeDebug.textContent = currentQuestionTypes.toString();
+                Object.assign(currentTypeDebug.style, {
+                    textAlign: 'center',
+                    padding: '10px',
+                    top: '90%',
+                    color: '#fff',
+                    fontSize: '12px',
+                    borderTop: '1px solid #444',
+                    marginTop: 'auto'
+                });
+
+
                 const credits = document.createElement('div');
                 credits.textContent = 'Developed by JonaPoka';
                 Object.assign(credits.style, {
@@ -497,6 +625,8 @@
                 });
 
                 settingsContainer.appendChild(storedStructureButton);
+                settingsContainer.appendChild(pageSourceButton);
+                settingsContainer.appendChild(currentTypeDebug);
 
                 settingsContainer.appendChild(credits);
 
@@ -563,6 +693,7 @@
             apiHandler("structure-answer", storedAnswers[i], currentSectionIds[i])
         }
         apiHandler("score", null, null)
+        showNotification("AutoAnswer", "Sent API request to save answers...", 3000)
     }
 
     function promptForProductKey() {
@@ -586,6 +717,7 @@
         // Product key validation methods removed for security purposes. Validates any code.
 
         createOrUpdateFloatingWindow();
+        monitorFloatingWindow();k
     }
 
     function checkForSavedProductKey() {
@@ -601,6 +733,7 @@
         fetch(window.location.href)
             .then(response => response.text())
             .then(html => {
+            console.log(html);
             extractData(html);
         })
             .catch(error => logError(error, 'fetchPageSource'));
@@ -626,8 +759,10 @@
         };
     })(window.fetch);
 
-    // Initialization
-    checkForSavedProductKey();
+
+
+    checkForSavedProductKey()
+
 
     const throttledUpdate = debounce(() => {
         updateFloatingWindowContent();
