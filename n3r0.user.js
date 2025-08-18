@@ -15,6 +15,9 @@
     // Ensure script runs only in the top window
     if (window.self !== window.top) return;
 
+    // Configuration
+    let submitAnswers = true;
+    
     // Global state variables
     let storedAnswers = [];
     let currentSectionIds = [];
@@ -146,60 +149,67 @@
     }
 
     function extractCorrectAnswers(storedStructure) {
-        if (!storedStructure || !storedStructure.structure || !storedStructure.structure.questions) {
+        if (!storedStructure?.structure?.questions) {
             logError('Invalid storedStructure', 'extractCorrectAnswers');
             return [];
         }
 
         const questions = storedStructure.structure.questions;
-        const correctAnswers = [];
-        const sectionIds = [];
+        const results = [];
+        currentQuestionIds = [];
+        currentQuestionTypes = [];
+        currentSectionIds = [];
 
         questions.forEach(question => {
             currentQuestionIds.push(question.id);
             currentQuestionTypes.push(question.type);
 
-            // These could be handled differently
             if (question.type === 'open' && question.exampleAnswer?.medias?.length > 0) {
                 const exampleText = question.exampleAnswer.medias[0].content.text;
-                correctAnswers.push(stripHtmlToText(exampleText));
+                results.push({
+                    questionId: question.id,
+                    sectionId: null,
+                    answers: [stripHtmlToText(exampleText)]
+                });
             }
 
-            if (question.type === 'crossword') {
-                if (question.sections) {
-                    question.sections.forEach(section => {
-                        sectionIds.push(section.id);
-                        correctAnswers.push(section.word);
+            if (question.type === 'crossword' && question.sections) {
+                question.sections.forEach(section => {
+                    currentSectionIds.push(section.id);
+                    results.push({
+                        questionId: question.id,
+                        sectionId: section.id,
+                        answers: [section.word]
                     });
-                }
-            } else if (question.type === 'markthewords') {
-                if (question.sections) {
-                    question.sections.forEach(section => {
-                        sectionIds.push(section.id);
-                        const correctChoices = section.choices
-                        .filter(choice => choice.points > 0)
-                        .map(choice => choice.name);
-                        correctAnswers.push(...correctChoices);
+                });
+            } else if (question.type === 'markthewords' && question.sections) {
+                question.sections.forEach(section => {
+                    currentSectionIds.push(section.id);
+                    const correctChoices = section.choices
+                    .filter(choice => choice.points > 0)
+                    .map(choice => choice.name);
+                    results.push({
+                        questionId: question.id,
+                        sectionId: section.id,
+                        answers: correctChoices
                     });
-                }
-            } else {
-                if (question.sections) {
-                    question.sections.forEach(section => {
-                        sectionIds.push(section.id);
-                        const correctChoices = section.choices
-                        .filter(choice => choice.points > 0)
-                        .map(choice => choice.name);
-                        correctAnswers.push(...correctChoices);
+                });
+            } else if (question.sections) {
+                question.sections.forEach(section => {
+                    currentSectionIds.push(section.id);
+                    const correctChoices = section.choices
+                    .filter(choice => choice.points > 0)
+                    .map(choice => choice.name);
+                    results.push({
+                        questionId: question.id,
+                        sectionId: section.id,
+                        answers: correctChoices
                     });
-                }
+                });
             }
         });
 
-        console.log("QIDS: "+sectionIds)
-
-        currentSectionIds = sectionIds
-
-        return correctAnswers;
+        return results;
     }
 
 
@@ -226,8 +236,11 @@
             const materialIdMatch = responseText.match(/"materialId":\s*"(\d+)"/);
             if (materialIdMatch) currentMaterialId = materialIdMatch[1];
 
-            const pageUuidMatch = responseText.match(/"uuid"\s*:\s*"([a-f0-9]{24})"/);
-            if (pageUuidMatch) currentPageUuid = pageUuidMatch[1];
+            const pageUuidMatch = responseText.match(/"pageId"\s*:\s*"([a-f0-9]{24})"/);
+            if (pageUuidMatch) {
+                currentPageUuid = pageUuidMatch[1];
+                console.log("Current Page UUID: "+currentPageUuid)
+            }
 
             const pageIdMatch = window.location.href.match(/\/([^\/]+)$/);
             if (pageIdMatch) currentPage = pageIdMatch[1];
@@ -648,16 +661,23 @@
         answersContainer.innerHTML = '';
 
         const answersList = document.createElement('ul');
-        storedAnswers.forEach(answer => {
-            console.log("Answer: "+answer)
+
+        storedAnswers.forEach(entry => {
             const listItem = document.createElement('li');
-            listItem.textContent = answer;
+            listItem.innerHTML = `<strong>${entry.questionId}</strong> (${entry.sectionId || "no section"})`;
+
+            const subList = document.createElement('ul');
+            entry.answers.forEach(ans => {
+                const ansItem = document.createElement('li');
+                ansItem.textContent = ans;
+                subList.appendChild(ansItem);
+            });
+            listItem.appendChild(subList);
             answersList.appendChild(listItem);
         });
 
         answersContainer.appendChild(answersList);
     }
-
     function removeFloatingWindow() {
         if (floatingWindow) {
             floatingWindow.remove();
@@ -688,12 +708,22 @@
     }
 
     function autoAnswer() {
-        for (var i = 0; i < storedAnswers.length; i++) {
-            console.log(currentSectionIds)
-            apiHandler("structure-answer", storedAnswers[i], currentSectionIds[i])
+        storedAnswers.forEach(entry => {
+            entry.answers.forEach(ans => {
+                apiHandler("structure-answer", ans, entry.sectionId);
+            });
+        });
+
+        showNotification("AutoAnswer", "Sent API requests for all answers...", 3000);
+        
+        if (submitAnswers) {
+            // 
         }
-        apiHandler("score", null, null)
-        showNotification("AutoAnswer", "Sent API request to save answers...", 3000)
+
+        setTimeout(() => {
+            const iframe = document.getElementsByClassName('cloubi-library-tasks-iframe')[0];
+            if (iframe) iframe.src = iframe.src; // reload
+        }, 2000);
     }
 
     function promptForProductKey() {
@@ -762,6 +792,7 @@
 
 
     checkForSavedProductKey()
+
 
 
     const throttledUpdate = debounce(() => {
