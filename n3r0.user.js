@@ -32,6 +32,7 @@
     let currentPageUuid = null;
     let currentQuestionIds = [];
     let currentMaxScore = null;
+    let windowTerminated = false;
 
     let lastPageUrl = window.location.href;
     let pageChangeTimeout = null;
@@ -411,6 +412,7 @@
 
     function monitorFloatingWindow() {
         setInterval(() => {
+            if (windowTerminated) return;
             if (!floatingWindow || !document.body.contains(floatingWindow)) {
                 console.warn("Floating window missing, restoring...");
                 createOrUpdateFloatingWindow();
@@ -842,6 +844,7 @@
     }
     function removeFloatingWindow() {
         if (floatingWindow) {
+            windowTerminated = true;
             floatingWindow.remove();
             floatingWindow = null;
         }
@@ -1033,6 +1036,8 @@
                 pageChangeTimeout = null;
             }, 6000);
         }
+
+        if (windowTerminated) return;
 
         updateFloatingWindowContent();
         extractFlashcardQuestion();
