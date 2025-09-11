@@ -122,7 +122,6 @@
                 pageUuid: currentPageUuid,
             });
         } else if (type === "suspend-data") {
-            // You can make this dynamic later if needed
             const suspendData = {
                 Seed: Date.now(),
                 randomFilePrefix: Date.now(),
@@ -231,7 +230,6 @@
         const correctIndexes = [];
 
         correctAnswers.forEach(answer => {
-            // split multi-word answers
             const answerWords = answer.split(/\s+/).map(w => w.replace(/[.,!?;:]/g, ""));
 
             for (let i = 0; i <= words.length - answerWords.length; i++) {
@@ -245,7 +243,6 @@
                 }
 
                 if (match) {
-                    // push all indexes for this multi-word answer
                     for (let j = 0; j < answerWords.length; j++) {
                         correctIndexes.push((i + j).toString());
                     }
@@ -310,7 +307,7 @@
 
                 results.push({
                     questionId: question.id,
-                    sectionId: question.sections[0].id, // markthewords usually has one section
+                    sectionId: question.sections[0].id,
                     answers: correctIndexes
                 });
             } else if (question.sections) {
@@ -379,7 +376,6 @@
                 storedAnswers = extractCorrectAnswers(currentStoredStructure);
                 updateFloatingWindowContent();
 
-                // Clear any pending page change timeout since we found new structure
                 if (pageChangeTimeout) {
                     clearTimeout(pageChangeTimeout);
                     pageChangeTimeout = null;
@@ -824,17 +820,15 @@
         }
         answersContainer.innerHTML = '';
 
-        const answersList = document.createElement('div'); // use div instead of ul
+        const answersList = document.createElement('div');
 
         storedAnswers.forEach(entry => {
-            const answerGroup = document.createElement('div'); // Create a container for each question's answers
-            answerGroup.style.marginBottom = '10px'; // Add some spacing between questions
+            const answerGroup = document.createElement('div');
+            answerGroup.style.marginBottom = '10px';
 
-            // Join all answers for this entry with commas or your preferred separator
-            const answersText = entry.answers.join(', '); // This will put all answers on the same line
+            const answersText = entry.answers.join(', ');
             answerGroup.textContent = answersText;
 
-            // add a line separator after each question group
             const separator = document.createElement('hr');
             separator.style.border = "0";
             separator.style.borderTop = "1px solid #555";
@@ -876,14 +870,11 @@
     }
 
     function autoAnswer() {
-        // Get the button element and change its appearance
         const autoAnswerButton = document.querySelector('#buttonsContainer button');
         if (autoAnswerButton) {
-            // Store original styles
             const originalBgColor = autoAnswerButton.style.backgroundColor;
             const originalText = autoAnswerButton.textContent;
 
-            // Change to gray and disable
             autoAnswerButton.style.backgroundColor = '#666';
             autoAnswerButton.textContent = 'Sending...';
             autoAnswerButton.disabled = true;
@@ -896,7 +887,6 @@
             entry.answers.forEach(ans => {
                 let formattedAnswer = ans;
 
-                // If open question -> wrap & encode in <p>...</p>
                 const questionIndex = currentQuestionIds.indexOf(entry.questionId);
                 if (questionIndex !== -1 && currentQuestionTypes[questionIndex] === "open") {
                     formattedAnswer = `&lt;p&gt;${htmlEncode(ans)}&lt;/p&gt;`;
@@ -916,7 +906,6 @@
         setTimeout(() => {
             showNotification("AutoAnswer", "Reloading, please wait...", 3000);
 
-            // Restore button appearance after operation
             if (autoAnswerButton) {
                 autoAnswerButton.style.backgroundColor = '#4CAF50';
                 autoAnswerButton.textContent = 'Send Answers';
@@ -947,9 +936,8 @@
     function validateProductKey(productKey) {
         localStorage.setItem('productKey', productKey);
 
-        // Product key validation methods removed for security purposes. Validates any code.
         const startTime = Date.now();
-        // Wait until the main iframe is present before creating the window
+
         function waitForIframe() {
             const iframe = document.querySelector("iframe");
             if (iframe && iframe.contentDocument && iframe.contentDocument.readyState === "complete") {
@@ -959,7 +947,6 @@
                 const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                 showNotification('N3R0',`Successfully injected in ${elapsed} seconds`);
 
-                // ⚡ Force initial parse if storedStructure already exists
                 if (window.storedStructure) {
                     processStoredStructure(window.storedStructure);
                 }
@@ -976,7 +963,6 @@
             }
         }
 
-        // Kick off the check once DOM is ready
         if (document.readyState === "complete" || document.readyState === "interactive") {
             waitForIframe();
         } else {
@@ -1034,21 +1020,18 @@
     const throttledUpdate = debounce(() => {
         const currentUrl = window.location.href;
 
-        // Check if page URL has changed
         if (currentUrl !== lastPageUrl) {
             console.log("Page URL changed from", lastPageUrl, "to", currentUrl);
             lastPageUrl = currentUrl;
 
-            // Set a timeout to check if new storedStructure was found
             if (pageChangeTimeout) {
                 clearTimeout(pageChangeTimeout);
             }
 
             pageChangeTimeout = setTimeout(() => {
-                // If we reach here, it means no new storedStructure was detected within the timeout
                 handlePageChangeWithoutStructure();
                 pageChangeTimeout = null;
-            }, 2000); // Wait 2 seconds for new structure to be detected
+            }, 6000);
         }
 
         updateFloatingWindowContent();
