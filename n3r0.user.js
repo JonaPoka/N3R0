@@ -1,7 +1,7 @@
 -// ==UserScript==
-// @name        N3r0 Performance Test
+// @name        N3r0
 // @namespace   http://n3r0.tech/
-// @version     1.0
+// @version     2.0
 // @description Kun et vaan jaksaisi koulua
 // @author      You
 // @match       *://materiaalit.otava.fi/*
@@ -12,12 +12,11 @@
 (function () {
     'use strict';
 
-    // Ensure script runs only in the top window
     if (window.self !== window.top) return;
 
     // Configuration
     let submitAnswers = true;
-    
+
     // Global state variables
     let storedAnswers = [];
     let currentSectionIds = [];
@@ -34,6 +33,10 @@
     let currentQuestionIds = [];
     let currentMaxScore = null;
 
+    let lastPageUrl = window.location.href;
+    let pageChangeTimeout = null;
+
+
     // Constants
     const API_BASE_URL = "https://materiaalit.otava.fi/o/task-container/a/";
     const INPUT_FIELD_SELECTOR = 'input, textarea, [aria-label]';
@@ -43,7 +46,7 @@
     // Utility Functions
     function logError(error, context = '') {
         console.error(`Error in ${context}:`, error);
-        showNotification('DEBUG', `Error in ${context}`, 3000)
+        // showNotification('DEBUG', `Error in ${context}`, 3000)
     }
 
     function debounce(func, delay) {
@@ -80,56 +83,109 @@
     }
 
     // API Interaction Functions
-    async function apiHandler(type, answer, sectionId) {
-        const url = type === "structure-answer"
-            ? `${API_BASE_URL}${currentTaskId}/-/structure-answer`
-            : `${API_BASE_URL}${currentTaskId}/-/score`;
+    async function apiHandler(type, answer, sectionId, questionId) {
+        const url =
+              type === "structure-answer"
+        ? `${API_BASE_URL}${currentTaskId}/-/structure-answer`
+        : type === "score"
+        ? `${API_BASE_URL}${currentTaskId}/-/score`
+        : type === "suspend-data"
+        ? `${API_BASE_URL}${currentTaskId}/-/suspend-data`
+        : null;
 
-        const body = type === "structure-answer"
-            ? JSON.stringify({
-                questionId: currentQuestionIds[0],
+        if (!url) {
+            logError(new Error(`Unknown API handler type: ${type}`), "apiHandler");
+            return;
+        }
+
+        let body;
+        if (type === "structure-answer") {
+            body = JSON.stringify({
+                questionId: questionId,
                 sectionId: sectionId,
-                answer: [answer],
+                answer: Array.isArray(answer) ? answer : [answer],
                 score: 0,
                 graded: 1,
                 materialId: currentMaterialId,
                 materialUuid: currentMaterialUuid,
                 page: currentPage,
-                pageUuid: currentPageUuid
-            })
-            : JSON.stringify({
+                pageUuid: currentPageUuid,
+            });
+        } else if (type === "score") {
+            body = JSON.stringify({
                 score: currentMaxScore,
                 progressMeasure: 1,
                 scoreMax: currentMaxScore,
                 materialId: currentMaterialId,
                 materialUuid: currentMaterialUuid,
                 page: currentPage,
-                pageUuid: currentPageUuid
+                pageUuid: currentPageUuid,
             });
+        } else if (type === "suspend-data") {
+            // You can make this dynamic later if needed
+            const suspendData = {
+                Seed: Date.now(),
+                randomFilePrefix: Date.now(),
+                Pages: { current: 0 },
+                Questions: {
+                    [questionId]: {
+                        answersCheckCount: 0,
+                        wrongAnswersCount: 0,
+                        Sections: {
+                            [sectionId]: {
+                                answer: Array.isArray(answer) ? answer : [answer],
+                                answersCheckCount: 0,
+                                answerHasChanged: true,
+                                wrongAnswersCount: 0,
+                                locked: false,
+                            },
+                        },
+                        Assignment: {},
+                    },
+                },
+                Containers: {
+                    ["K3122"]: {
+                        isSeen: true,
+                        isCompleted: true,
+                        isActiveContainer: true,
+                    },
+                },
+            };
+
+            body = JSON.stringify({
+                suspendData: JSON.stringify(suspendData),
+            });
+        }
 
         try {
             const response = await fetch(url, {
-                method: 'POST',
+                method: "POST",
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
+                    "Content-Type": "application/json; charset=UTF-8",
+                    Accept: "application/json, text/javascript, */*; q=0.01",
+                    "X-Requested-With": "XMLHttpRequest",
+                    ...(window.csrfToken ? { "X-CSRF-Token": window.csrfToken } : {}),
                 },
-                body: body
+                credentials: "include",
+                body: body,
             });
-            if (!response.ok) throw new Error(`API request failed: ${response.statusText}`);
+
+            if (!response.ok) {
+                throw new Error(`API request failed: ${response.statusText}`);
+            }
+
+            return await response.json().catch(() => ({}));
         } catch (error) {
-            logError(error, 'apiHandler');
+            logError(error, "apiHandler");
         }
     }
 
+
     function stripHtmlToText(html) {
-        // 1. Turn block-level tags into newlines
         html = html.replace(/<\s*\/?(div|p|h[1-6]|li|br)[^>]*>/gi, '\n');
 
-        // 2. Remove all other tags
         html = html.replace(/<[^>]+>/g, '');
 
-        // 3. Decode a few common HTML entities
         html = html
             .replace(/&nbsp;/g, ' ')
             .replace(/&amp;/g, '&')
@@ -138,15 +194,70 @@
             .replace(/&quot;/g, '"')
             .replace(/&#39;/g, "'");
 
-        // 4. Normalize whitespace and collapse multiple newlines
         html = html
-            .replace(/\r\n|\r/g, '\n')       // unify newlines
-            .replace(/\n[ \t]*\n+/g, '\n\n') // collapse multiple blank lines
-            .replace(/[ \t]+/g, ' ')         // collapse spaces/tabs
+            .replace(/\r\n|\r/g, '\n')
+            .replace(/\n[ \t]*\n+/g, '\n\n')
+            .replace(/[ \t]+/g, ' ')
             .trim();
 
         return html;
     }
+
+    function htmlEncode(str) {
+        return str
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#x27;");
+    }
+
+    function removeArtifacts(str) {
+        return str
+            .replace('Suggested key', '')
+    }
+
+
+    function handleMarkTheWords(questionId, correctAnswers, iframeDocument) {
+        const questionDiv = iframeDocument.querySelector(`#question-${questionId}`);
+        if (!questionDiv) {
+            console.error(`Question div not found for ID: ${questionId}`);
+            return [];
+        }
+
+        const textContent = questionDiv.textContent.trim();
+        const words = textContent.split(/\s+/).map(w => w.replace(/[.,!?;:]/g, ""));
+
+        const correctIndexes = [];
+
+        correctAnswers.forEach(answer => {
+            // split multi-word answers
+            const answerWords = answer.split(/\s+/).map(w => w.replace(/[.,!?;:]/g, ""));
+
+            for (let i = 0; i <= words.length - answerWords.length; i++) {
+                let match = true;
+
+                for (let j = 0; j < answerWords.length; j++) {
+                    if (words[i + j] !== answerWords[j]) {
+                        match = false;
+                        break;
+                    }
+                }
+
+                if (match) {
+                    // push all indexes for this multi-word answer
+                    for (let j = 0; j < answerWords.length; j++) {
+                        correctIndexes.push((i + j).toString());
+                    }
+                    console.log(`Found match: "${answer}" at indexes [${i}..${i + answerWords.length - 1}]`);
+                }
+            }
+        });
+
+        console.log(`Correct indexes for question ${questionId}:`, correctIndexes);
+        return correctIndexes;
+    }
+
 
     function extractCorrectAnswers(storedStructure) {
         if (!storedStructure?.structure?.questions) {
@@ -154,22 +265,28 @@
             return [];
         }
 
+        const iframeDocument = window.top.document.querySelector('iframe').contentDocument;
         const questions = storedStructure.structure.questions;
         const results = [];
         currentQuestionIds = [];
         currentQuestionTypes = [];
         currentSectionIds = [];
 
+
+
         questions.forEach(question => {
             currentQuestionIds.push(question.id);
             currentQuestionTypes.push(question.type);
 
-            if (question.type === 'open' && question.exampleAnswer?.medias?.length > 0) {
-                const exampleText = question.exampleAnswer.medias[0].content.text;
-                results.push({
-                    questionId: question.id,
-                    sectionId: null,
-                    answers: [stripHtmlToText(exampleText)]
+            if (question.type === 'open' && question.exampleAnswer?.medias?.length > 0 && question.sections) {
+                question.sections.forEach(section => {
+                    const exampleText = question.exampleAnswer.medias[0].content.text;
+                    const strippedAnswer = stripHtmlToText(exampleText);
+                    results.push({
+                        questionId: question.id,
+                        sectionId: section.id,
+                        answers: [removeArtifacts(strippedAnswer)]
+                    });
                 });
             }
 
@@ -183,16 +300,18 @@
                     });
                 });
             } else if (question.type === 'markthewords' && question.sections) {
-                question.sections.forEach(section => {
-                    currentSectionIds.push(section.id);
-                    const correctChoices = section.choices
-                    .filter(choice => choice.points > 0)
-                    .map(choice => choice.name);
-                    results.push({
-                        questionId: question.id,
-                        sectionId: section.id,
-                        answers: correctChoices
-                    });
+                const correctAnswers = question.sections
+                    .map(sec => sec.choices.filter(c => c.correct).map(c => c.name))
+                    .flat();
+
+                console.log("answers" + correctAnswers)
+
+                const correctIndexes = handleMarkTheWords(question.id, correctAnswers, iframeDocument);
+
+                results.push({
+                    questionId: question.id,
+                    sectionId: question.sections[0].id, // markthewords usually has one section
+                    answers: correctIndexes
                 });
             } else if (question.sections) {
                 question.sections.forEach(section => {
@@ -212,6 +331,45 @@
         return results;
     }
 
+    function handlePageChangeWithoutStructure() {
+        console.log("Page changed but no new storedStructure detected, flushing answers");
+
+        // Flush stored answers
+        storedAnswers = [];
+        currentSectionIds = [];
+        currentQuestionTypes = [];
+        currentFlashcardQuestion = null;
+        currentStoredStructure = null;
+        currentQuestionIds = [];
+
+        // Update floating window to show "No answers detected"
+        updateFloatingWindowContentNoAnswers();
+
+        showNotification("N3R0", "No answers detected on this page", 3000);
+    }
+
+    function updateFloatingWindowContentNoAnswers() {
+        if (!floatingWindow) return;
+
+        const answersContainer = document.getElementById('answersContainer');
+        if (!answersContainer) {
+            logError('Answers container not found in floating window.', 'updateFloatingWindowContentNoAnswers');
+            return;
+        }
+        answersContainer.innerHTML = '';
+
+        const noAnswersDiv = document.createElement('div');
+        noAnswersDiv.textContent = 'No answers detected';
+        Object.assign(noAnswersDiv.style, {
+            textAlign: 'center',
+            color: '#888',
+            fontStyle: 'italic',
+            padding: '20px'
+        });
+
+        answersContainer.appendChild(noAnswersDiv);
+    }
+
 
     function extractData(responseText) {
         try {
@@ -220,6 +378,12 @@
                 currentStoredStructure = JSON.parse(storedStructureMatch[1]);
                 storedAnswers = extractCorrectAnswers(currentStoredStructure);
                 updateFloatingWindowContent();
+
+                // Clear any pending page change timeout since we found new structure
+                if (pageChangeTimeout) {
+                    clearTimeout(pageChangeTimeout);
+                    pageChangeTimeout = null;
+                }
             }
 
             const taskIdMatch = responseText.match(/var taskId = '([^']+)';/);
@@ -251,12 +415,11 @@
 
     function monitorFloatingWindow() {
         setInterval(() => {
-            // if window is gone or detached from DOM → restore
             if (!floatingWindow || !document.body.contains(floatingWindow)) {
                 console.warn("Floating window missing, restoring...");
                 createOrUpdateFloatingWindow();
             }
-        }, 1000); // check every second
+        }, 1000);
     }
 
 
@@ -380,7 +543,7 @@
         });
 
         const autoAnswerButton = document.createElement('button');
-        autoAnswerButton.textContent = 'Auto Answer';
+        autoAnswerButton.textContent = 'Send Answers';
         Object.assign(autoAnswerButton.style, {
             width: '100%',
             padding: '8px',
@@ -410,7 +573,8 @@
         });
 
         buttonsContainer.appendChild(autoAnswerButton);
-        buttonsContainer.appendChild(placeholderButton);
+        // Implement later
+        // buttonsContainer.appendChild(placeholderButton);
 
         const navContainer = document.createElement('div');
         Object.assign(navContainer.style, {
@@ -660,23 +824,26 @@
         }
         answersContainer.innerHTML = '';
 
-        const answersList = document.createElement('ul');
+        const answersList = document.createElement('div'); // use div instead of ul
 
         storedAnswers.forEach(entry => {
-            const listItem = document.createElement('li');
-            listItem.innerHTML = `<strong>${entry.questionId}</strong> (${entry.sectionId || "no section"})`;
-
-            const subList = document.createElement('ul');
             entry.answers.forEach(ans => {
-                const ansItem = document.createElement('li');
-                ansItem.textContent = ans;
-                subList.appendChild(ansItem);
+                const ansDiv = document.createElement('div');
+                ansDiv.textContent = ans;
+
+                // add a line separator after each answer
+                const separator = document.createElement('hr');
+                separator.style.border = "0";
+                separator.style.borderTop = "1px solid #555";
+                separator.style.margin = "6px 0";
+
+                answersList.appendChild(ansDiv);
+                answersList.appendChild(separator);
             });
-            listItem.appendChild(subList);
-            answersList.appendChild(listItem);
         });
 
         answersContainer.appendChild(answersList);
+
     }
     function removeFloatingWindow() {
         if (floatingWindow) {
@@ -708,22 +875,57 @@
     }
 
     function autoAnswer() {
+        // Get the button element and change its appearance
+        const autoAnswerButton = document.querySelector('#buttonsContainer button');
+        if (autoAnswerButton) {
+            // Store original styles
+            const originalBgColor = autoAnswerButton.style.backgroundColor;
+            const originalText = autoAnswerButton.textContent;
+
+            // Change to gray and disable
+            autoAnswerButton.style.backgroundColor = '#666';
+            autoAnswerButton.textContent = 'Sending...';
+            autoAnswerButton.disabled = true;
+            autoAnswerButton.style.cursor = 'not-allowed';
+        }
+
+        console.log(storedAnswers)
         storedAnswers.forEach(entry => {
+            console.log("Entry: "+entry)
             entry.answers.forEach(ans => {
-                apiHandler("structure-answer", ans, entry.sectionId);
+                let formattedAnswer = ans;
+
+                // If open question -> wrap & encode in <p>...</p>
+                const questionIndex = currentQuestionIds.indexOf(entry.questionId);
+                if (questionIndex !== -1 && currentQuestionTypes[questionIndex] === "open") {
+                    formattedAnswer = `&lt;p&gt;${htmlEncode(ans)}&lt;/p&gt;`;
+                }
+                // apiHandler("suspend-data", formattedAnswer, entry.sectionId, entry.questionId);
+                apiHandler("structure-answer", formattedAnswer, entry.sectionId, entry.questionId);
+                // showNotification("AutoAnswer", "Sent", 3000);
             });
         });
 
         showNotification("AutoAnswer", "Sent API requests for all answers...", 3000);
-        
+
         if (submitAnswers) {
-            // 
+            //
         }
 
         setTimeout(() => {
-            const iframe = document.getElementsByClassName('cloubi-library-tasks-iframe')[0];
-            if (iframe) iframe.src = iframe.src; // reload
-        }, 2000);
+            showNotification("AutoAnswer", "Reloading, please wait...", 3000);
+
+            // Restore button appearance after operation
+            if (autoAnswerButton) {
+                autoAnswerButton.style.backgroundColor = '#4CAF50';
+                autoAnswerButton.textContent = 'Send Answers';
+                autoAnswerButton.disabled = false;
+                autoAnswerButton.style.cursor = 'pointer';
+            }
+
+            document.querySelectorAll("button.cb-page-turner")[0].click();
+        }, 1000);
+        document.querySelectorAll("button.cb-page-turner")[1].click();
     }
 
     function promptForProductKey() {
@@ -745,10 +947,43 @@
         localStorage.setItem('productKey', productKey);
 
         // Product key validation methods removed for security purposes. Validates any code.
+        const startTime = Date.now();
+        // Wait until the main iframe is present before creating the window
+        function waitForIframe() {
+            const iframe = document.querySelector("iframe");
+            if (iframe && iframe.contentDocument && iframe.contentDocument.readyState === "complete") {
+                createOrUpdateFloatingWindow();
+                monitorFloatingWindow();
 
-        createOrUpdateFloatingWindow();
-        monitorFloatingWindow();k
+                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+                showNotification('N3R0',`Successfully injected in ${elapsed} seconds`);
+
+                // ⚡ Force initial parse if storedStructure already exists
+                if (window.storedStructure) {
+                    processStoredStructure(window.storedStructure);
+                }
+
+                iframe.addEventListener("load", () => {
+                    createOrUpdateFloatingWindow();
+                    monitorFloatingWindow();
+                    if (window.storedStructure) {
+                        processStoredStructure(window.storedStructure);
+                    }
+                });
+            } else {
+                setTimeout(waitForIframe, 500);
+            }
+        }
+
+        // Kick off the check once DOM is ready
+        if (document.readyState === "complete" || document.readyState === "interactive") {
+            waitForIframe();
+        } else {
+            window.addEventListener("DOMContentLoaded", waitForIframe);
+        }
     }
+
+
 
     function checkForSavedProductKey() {
         const savedProductKey = localStorage.getItem('productKey');
@@ -796,10 +1031,29 @@
 
 
     const throttledUpdate = debounce(() => {
+        const currentUrl = window.location.href;
+
+        // Check if page URL has changed
+        if (currentUrl !== lastPageUrl) {
+            console.log("Page URL changed from", lastPageUrl, "to", currentUrl);
+            lastPageUrl = currentUrl;
+
+            // Set a timeout to check if new storedStructure was found
+            if (pageChangeTimeout) {
+                clearTimeout(pageChangeTimeout);
+            }
+
+            pageChangeTimeout = setTimeout(() => {
+                // If we reach here, it means no new storedStructure was detected within the timeout
+                handlePageChangeWithoutStructure();
+                pageChangeTimeout = null;
+            }, 2000); // Wait 2 seconds for new structure to be detected
+        }
+
         updateFloatingWindowContent();
         extractFlashcardQuestion();
+        extractCorrectAnswers(currentStoredStructure);
     }, 200);
-
     const observer = new MutationObserver(throttledUpdate);
     observer.observe(document.body, { childList: true, subtree: true });
 
