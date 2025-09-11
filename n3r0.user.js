@@ -1,4 +1,4 @@
-// ==UserScript==
+-// ==UserScript==
 // @name        N3r0
 // @namespace   http://n3r0.tech/
 // @version     2.0
@@ -36,25 +36,6 @@
     let lastPageUrl = window.location.href;
     let pageChangeTimeout = null;
 
-    // Obfuscation: Generate random IDs for elements
-    const generateRandomId = () => {
-        const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-        let result = '';
-        for (let i = 0; i < 12; i++) {
-            result += chars.charAt(Math.floor(Math.random() * chars.length));
-        }
-        return result;
-    };
-
-    // Randomized element IDs (regenerated on each reload)
-    let randomIds = {
-        floatingWindow: generateRandomId(),
-        answersContainer: generateRandomId(),
-        buttonsContainer: generateRandomId(),
-        settingsContainer: generateRandomId(),
-        notificationContainer: generateRandomId(),
-        restoreButton: generateRandomId()
-    };
 
     // Constants
     const API_BASE_URL = "https://materiaalit.otava.fi/o/task-container/a/";
@@ -370,7 +351,7 @@
     function updateFloatingWindowContentNoAnswers() {
         if (!floatingWindow) return;
 
-        const answersContainer = document.getElementById(randomIds.answersContainer);
+        const answersContainer = document.getElementById('answersContainer');
         if (!answersContainer) {
             logError('Answers container not found in floating window.', 'updateFloatingWindowContentNoAnswers');
             return;
@@ -448,18 +429,8 @@
             return;
         }
 
-        // Regenerate random IDs on each window creation
-        randomIds = {
-            floatingWindow: generateRandomId(),
-            answersContainer: generateRandomId(),
-            buttonsContainer: generateRandomId(),
-            settingsContainer: generateRandomId(),
-            notificationContainer: generateRandomId(),
-            restoreButton: generateRandomId()
-        };
-
         floatingWindow = document.createElement('div');
-        floatingWindow.id = randomIds.floatingWindow;
+        floatingWindow.id = 'floatingWindow';
         Object.assign(floatingWindow.style, {
             position: 'fixed',
             width: '400px',
@@ -547,7 +518,7 @@
         });
 
         const answersContainer = document.createElement('div');
-        answersContainer.id = randomIds.answersContainer;
+        answersContainer.id = 'answersContainer';
         Object.assign(answersContainer.style, {
             flex: '2',
             padding: '10px',
@@ -558,7 +529,7 @@
         });
 
         const buttonsContainer = document.createElement('div');
-        buttonsContainer.id = randomIds.buttonsContainer;
+        buttonsContainer.id = 'buttonsContainer';
         Object.assign(buttonsContainer.style, {
             flex: '1',
             display: 'flex',
@@ -649,7 +620,7 @@
         makeElementDraggable(floatingWindow);
 
         const notificationContainer = document.createElement('div');
-        notificationContainer.id = randomIds.notificationContainer;
+        notificationContainer.id = 'notification-container';
         Object.assign(notificationContainer.style, {
             position: 'fixed',
             bottom: '20px',
@@ -696,11 +667,7 @@
 
             notification.appendChild(titleElem);
             notification.appendChild(messageElem);
-
-            const notificationContainer = document.getElementById(randomIds.notificationContainer);
-            if (notificationContainer) {
-                notificationContainer.appendChild(notification);
-            }
+            notificationContainer.appendChild(notification);
 
             requestAnimationFrame(() => {
                 notification.style.opacity = '1';
@@ -725,11 +692,11 @@
     }
 
     function createRestoreButton() {
-        const existingRestore = document.getElementById(randomIds.restoreButton);
+        const existingRestore = document.getElementById('restoreFloatingWindowBtn');
         if (existingRestore) return;
 
         const restoreBtn = document.createElement('button');
-        restoreBtn.id = randomIds.restoreButton;
+        restoreBtn.id = 'restoreFloatingWindowBtn';
         restoreBtn.textContent = 'Open N3R0';
         Object.assign(restoreBtn.style, {
             position: 'fixed',
@@ -754,9 +721,9 @@
     }
 
     function switchTab(tabName) {
-        const answersContainer = document.getElementById(randomIds.answersContainer);
-        const buttonsContainer = document.getElementById(randomIds.buttonsContainer);
-        const settingsContainer = document.getElementById(randomIds.settingsContainer);
+        const answersContainer = document.getElementById('answersContainer');
+        const buttonsContainer = document.getElementById('buttonsContainer');
+        const settingsContainer = document.getElementById('settingsContainer');
 
         if (tabName === 'answers') {
             answersContainer.style.display = 'block';
@@ -768,7 +735,7 @@
 
             if (!settingsContainer) {
                 const settingsContainer = document.createElement('div');
-                settingsContainer.id = randomIds.settingsContainer;
+                settingsContainer.id = 'settingsContainer';
                 Object.assign(settingsContainer.style, {
                     flex: '2',
                     padding: '10px',
@@ -850,7 +817,7 @@
     function updateFloatingWindowContent() {
         if (!floatingWindow) return;
 
-        const answersContainer = document.getElementById(randomIds.answersContainer);
+        const answersContainer = document.getElementById('answersContainer');
         if (!answersContainer) {
             logError('Answers container not found in floating window.', 'updateFloatingWindowContent');
             return;
@@ -860,23 +827,24 @@
         const answersList = document.createElement('div'); // use div instead of ul
 
         storedAnswers.forEach(entry => {
-            entry.answers.forEach(ans => {
-                const ansDiv = document.createElement('div');
-                ansDiv.textContent = ans;
+            const answerGroup = document.createElement('div'); // Create a container for each question's answers
+            answerGroup.style.marginBottom = '10px'; // Add some spacing between questions
 
-                // add a line separator after each answer
-                const separator = document.createElement('hr');
-                separator.style.border = "0";
-                separator.style.borderTop = "1px solid #555";
-                separator.style.margin = "6px 0";
+            // Join all answers for this entry with commas or your preferred separator
+            const answersText = entry.answers.join(', '); // This will put all answers on the same line
+            answerGroup.textContent = answersText;
 
-                answersList.appendChild(ansDiv);
-                answersList.appendChild(separator);
-            });
+            // add a line separator after each question group
+            const separator = document.createElement('hr');
+            separator.style.border = "0";
+            separator.style.borderTop = "1px solid #555";
+            separator.style.margin = "6px 0";
+
+            answersList.appendChild(answerGroup);
+            answersList.appendChild(separator);
         });
 
         answersContainer.appendChild(answersList);
-
     }
     function removeFloatingWindow() {
         if (floatingWindow) {
@@ -909,7 +877,7 @@
 
     function autoAnswer() {
         // Get the button element and change its appearance
-        const autoAnswerButton = document.querySelector(`#${randomIds.buttonsContainer} button`);
+        const autoAnswerButton = document.querySelector('#buttonsContainer button');
         if (autoAnswerButton) {
             // Store original styles
             const originalBgColor = autoAnswerButton.style.backgroundColor;
