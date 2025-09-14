@@ -1,7 +1,7 @@
--// ==UserScript==
+// ==UserScript==
 // @name        N3r0
 // @namespace   http://n3r0.tech/
-// @version     2.0
+// @version     2.1
 // @description Kun et vaan jaksaisi koulua
 // @author      You
 // @match       *://materiaalit.otava.fi/*
@@ -34,9 +34,7 @@
     let currentMaxScore = null;
     let windowTerminated = false;
 
-    let lastPageUrl = window.location.href;
     let pageChangeTimeout = null;
-
 
     // Constants
     const API_BASE_URL = "https://materiaalit.otava.fi/o/task-container/a/";
@@ -180,7 +178,6 @@
         }
     }
 
-
     function stripHtmlToText(html) {
         html = html.replace(/<\s*\/?(div|p|h[1-6]|li|br)[^>]*>/gi, '\n');
 
@@ -217,6 +214,13 @@
             .replace('Suggested key', '')
     }
 
+    function isAnswerEmpty(answer) {
+        if (!answer) return true;
+        if (typeof answer === 'string' && answer.trim() === '') return true;
+        if (Array.isArray(answer) && answer.length === 0) return true;
+        if (Array.isArray(answer) && answer.every(a => !a || a.trim() === '')) return true;
+        return false;
+    }
 
     function handleMarkTheWords(questionId, correctAnswers, iframeDocument) {
         const questionDiv = iframeDocument.querySelector(`#question-${questionId}`);
@@ -256,7 +260,6 @@
         return correctIndexes;
     }
 
-
     function extractCorrectAnswers(storedStructure) {
         if (!storedStructure?.structure?.questions) {
             logError('Invalid storedStructure', 'extractCorrectAnswers');
@@ -266,11 +269,11 @@
         const iframeDocument = window.top.document.querySelector('iframe').contentDocument;
         const questions = storedStructure.structure.questions;
         const results = [];
+        
+        // Reset variables
         currentQuestionIds = [];
         currentQuestionTypes = [];
         currentSectionIds = [];
-
-
 
         questions.forEach(question => {
             currentQuestionIds.push(question.id);
@@ -280,22 +283,28 @@
                 question.sections.forEach(section => {
                     const exampleText = question.exampleAnswer.medias[0].content.text;
                     const strippedAnswer = stripHtmlToText(exampleText);
-                    results.push({
-                        questionId: question.id,
-                        sectionId: section.id,
-                        answers: [removeArtifacts(strippedAnswer)]
-                    });
+                    const cleanAnswer = removeArtifacts(strippedAnswer);
+                    
+                    if (!isAnswerEmpty(cleanAnswer)) {
+                        results.push({
+                            questionId: question.id,
+                            sectionId: section.id,
+                            answers: [cleanAnswer]
+                        });
+                    }
                 });
             }
 
             if (question.type === 'crossword' && question.sections) {
                 question.sections.forEach(section => {
                     currentSectionIds.push(section.id);
-                    results.push({
-                        questionId: question.id,
-                        sectionId: section.id,
-                        answers: [section.word]
-                    });
+                    if (!isAnswerEmpty(section.word)) {
+                        results.push({
+                            questionId: question.id,
+                            sectionId: section.id,
+                            answers: [section.word]
+                        });
+                    }
                 });
             } else if (question.type === 'markthewords' && question.sections) {
                 const correctAnswers = question.sections
@@ -304,70 +313,36 @@
 
                 console.log("answers" + correctAnswers)
 
-                const correctIndexes = handleMarkTheWords(question.id, correctAnswers, iframeDocument);
-
-                results.push({
-                    questionId: question.id,
-                    sectionId: question.sections[0].id,
-                    answers: correctIndexes
-                });
+                if (correctAnswers.length > 0) {
+                    const correctIndexes = handleMarkTheWords(question.id, correctAnswers, iframeDocument);
+                    if (correctIndexes.length > 0) {
+                        results.push({
+                            questionId: question.id,
+                            sectionId: question.sections[0].id,
+                            answers: correctIndexes
+                        });
+                    }
+                }
             } else if (question.sections) {
                 question.sections.forEach(section => {
                     currentSectionIds.push(section.id);
                     const correctChoices = section.choices
-                    .filter(choice => choice.points > 0)
-                    .map(choice => choice.name);
-                    results.push({
-                        questionId: question.id,
-                        sectionId: section.id,
-                        answers: correctChoices
-                    });
+                        .filter(choice => choice.points > 0)
+                        .map(choice => choice.name);
+                    
+                    if (correctChoices.length > 0) {
+                        results.push({
+                            questionId: question.id,
+                            sectionId: section.id,
+                            answers: correctChoices
+                        });
+                    }
                 });
             }
         });
 
         return results;
     }
-
-    function handlePageChangeWithoutStructure() {
-        console.log("Page changed but no new storedStructure detected, flushing answers");
-
-        // Flush stored answers
-        storedAnswers = [];
-        currentSectionIds = [];
-        currentQuestionTypes = [];
-        currentFlashcardQuestion = null;
-        currentStoredStructure = null;
-        currentQuestionIds = [];
-
-        // Update floating window to show "No answers detected"
-        updateFloatingWindowContentNoAnswers();
-
-        showNotification("N3R0", "No answers detected on this page", 3000);
-    }
-
-    function updateFloatingWindowContentNoAnswers() {
-        if (!floatingWindow) return;
-
-        const answersContainer = document.getElementById('answersContainer');
-        if (!answersContainer) {
-            logError('Answers container not found in floating window.', 'updateFloatingWindowContentNoAnswers');
-            return;
-        }
-        answersContainer.innerHTML = '';
-
-        const noAnswersDiv = document.createElement('div');
-        noAnswersDiv.textContent = 'No answers detected';
-        Object.assign(noAnswersDiv.style, {
-            textAlign: 'center',
-            color: '#888',
-            fontStyle: 'italic',
-            padding: '20px'
-        });
-
-        answersContainer.appendChild(noAnswersDiv);
-    }
-
 
     function extractData(responseText) {
         try {
@@ -420,7 +395,6 @@
         }, 1000);
     }
 
-
     function createOrUpdateFloatingWindow() {
         if (floatingWindow) {
             updateFloatingWindowContent();
@@ -451,7 +425,7 @@
         const topBar = document.createElement('div');
         Object.assign(topBar.style, {
             backgroundColor: '#222',
-            padding: '5px',
+            padding: '5px 10px',
             height: '30px',
             display: 'flex',
             justifyContent: 'space-between',
@@ -469,44 +443,72 @@
             color: '#000',
             backgroundClip: 'text',
             WebkitTextFillColor: 'transparent',
-            animation: 'animatedTextGradient 1.5s linear infinite'
+            animation: 'animatedTextGradient 1.5s linear infinite',
+            flexShrink: '0',
+            fontFamily: 'Russo One, sans-serif'
         });
 
-        const closeButton = document.createElement('button');
-        closeButton.textContent = 'X';
-        Object.assign(closeButton.style, {
-            marginLeft: 'auto',
-            backgroundColor: '#ff4d4d',
-            border: 'none',
-            borderRadius: '15px',
-            color: '#fff',
-            cursor: 'pointer',
-            padding: '0 8px'
+        // Create a container for the buttons to keep them together
+        const buttonContainer = document.createElement('div');
+        Object.assign(buttonContainer.style, {
+            display: 'flex',
+            gap: '5px',
+            alignItems: 'center',
+            flexShrink: '0'
         });
-        closeButton.onclick = removeFloatingWindow;
 
         const minimizeButton = document.createElement('button');
         minimizeButton.textContent = '–';
         Object.assign(minimizeButton.style, {
-            marginLeft: '75%',
             backgroundColor: '#ffaa00',
             border: 'none',
             borderRadius: '15px',
             color: '#fff',
             cursor: 'pointer',
-            padding: '0 8px'
+            padding: '0 8px',
+            width: '16px',
+            height: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '14px',
+            lineHeight: '1'
         });
         minimizeButton.onclick = () => {
             floatingWindow.style.display = 'none';
             createRestoreButton();
         };
 
+        const closeButton = document.createElement('button');
+        closeButton.textContent = '×';
+        Object.assign(closeButton.style, {
+            backgroundColor: '#ff4d4d',
+            border: 'none',
+            borderRadius: '15px',
+            color: '#fff',
+            cursor: 'pointer',
+            padding: '0 4px',
+            width: '16px',
+            height: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '16px',
+            lineHeight: '1'
+        });
+        closeButton.onclick = removeFloatingWindow;
 
+        // Add buttons to the container
+        buttonContainer.appendChild(minimizeButton);
+        buttonContainer.appendChild(closeButton);
+
+        // Add elements to the top bar
         topBar.appendChild(title);
-        topBar.appendChild(minimizeButton);
-        topBar.appendChild(closeButton);
+        topBar.appendChild(buttonContainer);
 
         floatingWindow.appendChild(topBar);
+        
+        
 
         const mainContainer = document.createElement('div');
         Object.assign(mainContainer.style, {
@@ -758,7 +760,6 @@
                 });
                 storedStructureButton.onclick = () => navigator.clipboard.writeText(JSON.stringify(currentStoredStructure)).then(() => {alert("Copied to clipboard!")}).catch((error) => {logError(error)})
 
-
                 const pageSourceButton = document.createElement('button');
                 pageSourceButton.textContent = 'Copy Page Source as JSON';
                 Object.assign(pageSourceButton.style, {
@@ -786,7 +787,6 @@
                     marginTop: 'auto'
                 });
 
-
                 const credits = document.createElement('div');
                 credits.textContent = 'Developed by JonaPoka';
                 Object.assign(credits.style, {
@@ -802,7 +802,6 @@
                 settingsContainer.appendChild(storedStructureButton);
                 settingsContainer.appendChild(pageSourceButton);
                 settingsContainer.appendChild(currentTypeDebug);
-
                 settingsContainer.appendChild(credits);
 
                 window.mainContainer.insertBefore(settingsContainer, mainContainer.children[1]);
@@ -824,24 +823,37 @@
 
         const answersList = document.createElement('div');
 
-        storedAnswers.forEach(entry => {
-            const answerGroup = document.createElement('div');
-            answerGroup.style.marginBottom = '10px';
+        if (storedAnswers.length === 0) {
+            const noAnswersDiv = document.createElement('div');
+            noAnswersDiv.textContent = 'No answers detected';
+            Object.assign(noAnswersDiv.style, {
+                textAlign: 'center',
+                color: '#888',
+                fontStyle: 'italic',
+                padding: '20px'
+            });
+            answersList.appendChild(noAnswersDiv);
+        } else {
+            storedAnswers.forEach(entry => {
+                const answerGroup = document.createElement('div');
+                answerGroup.style.marginBottom = '10px';
 
-            const answersText = entry.answers.join(', ');
-            answerGroup.textContent = answersText;
+                const answersText = entry.answers.join(', ');
+                answerGroup.textContent = answersText;
 
-            const separator = document.createElement('hr');
-            separator.style.border = "0";
-            separator.style.borderTop = "1px solid #555";
-            separator.style.margin = "6px 0";
+                const separator = document.createElement('hr');
+                separator.style.border = "0";
+                separator.style.borderTop = "1px solid #555";
+                separator.style.margin = "6px 0";
 
-            answersList.appendChild(answerGroup);
-            answersList.appendChild(separator);
-        });
+                answersList.appendChild(answerGroup);
+                answersList.appendChild(separator);
+            });
+        }
 
         answersContainer.appendChild(answersList);
     }
+
     function removeFloatingWindow() {
         if (floatingWindow) {
             windowTerminated = true;
@@ -873,6 +885,11 @@
     }
 
     function autoAnswer() {
+        if (storedAnswers.length === 0) {
+            showNotification("AutoAnswer", "No answers available to send!", 3000);
+            return;
+        }
+
         const autoAnswerButton = document.querySelector('#buttonsContainer button');
         if (autoAnswerButton) {
             const originalBgColor = autoAnswerButton.style.backgroundColor;
@@ -900,7 +917,7 @@
             });
         });
 
-        showNotification("AutoAnswer", "Sent API requests for all answers...", 3000);
+        showNotification("AutoAnswer", `Sent API requests for ${storedAnswers.length} answers...`, 3000);
 
         if (submitAnswers) {
             //
@@ -921,68 +938,13 @@
         document.querySelectorAll("button.cb-page-turner")[1].click();
     }
 
-    function promptForProductKey() {
-        const productKey = prompt("Please enter your product key (format: xxxx-xxxx-xxxx-xxxx):");
-        if (productKey) {
-            const sanitizedKey = productKey.replace(/-/g, '');
-            if (sanitizedKey.length === 16) {
-                validateProductKey(sanitizedKey);
-            } else {
-                alert("Invalid product key format. Please try again.");
-                promptForProductKey();
-            }
-        } else {
-            alert("Product key is required to proceed.");
-        }
-    }
+    const startTime = Date.now()
+    
+    createOrUpdateFloatingWindow();
+    monitorFloatingWindow();
 
-    function validateProductKey(productKey) {
-        localStorage.setItem('productKey', productKey);
-
-        const startTime = Date.now();
-
-        function waitForIframe() {
-            const iframe = document.querySelector("iframe");
-            if (iframe && iframe.contentDocument && iframe.contentDocument.readyState === "complete") {
-                createOrUpdateFloatingWindow();
-                monitorFloatingWindow();
-
-                const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-                showNotification('N3R0',`Successfully injected in ${elapsed} seconds`);
-
-                if (window.storedStructure) {
-                    processStoredStructure(window.storedStructure);
-                }
-
-                iframe.addEventListener("load", () => {
-                    createOrUpdateFloatingWindow();
-                    monitorFloatingWindow();
-                    if (window.storedStructure) {
-                        processStoredStructure(window.storedStructure);
-                    }
-                });
-            } else {
-                setTimeout(waitForIframe, 500);
-            }
-        }
-
-        if (document.readyState === "complete" || document.readyState === "interactive") {
-            waitForIframe();
-        } else {
-            window.addEventListener("DOMContentLoaded", waitForIframe);
-        }
-    }
-
-
-
-    function checkForSavedProductKey() {
-        const savedProductKey = localStorage.getItem('productKey');
-        if (savedProductKey) {
-            validateProductKey(savedProductKey);
-        } else {
-            promptForProductKey();
-        }
-    }
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    showNotification('N3R0',`Successfully injected in ${elapsed} seconds`);
 
     function fetchPageSource() {
         fetch(window.location.href)
@@ -1014,28 +976,7 @@
         };
     })(window.fetch);
 
-
-
-    checkForSavedProductKey()
-
-
-
     const throttledUpdate = debounce(() => {
-        const currentUrl = window.location.href;
-
-        if (currentUrl !== lastPageUrl) {
-            console.log("Page URL changed from", lastPageUrl, "to", currentUrl);
-            lastPageUrl = currentUrl;
-
-            if (pageChangeTimeout) {
-                clearTimeout(pageChangeTimeout);
-            }
-
-            pageChangeTimeout = setTimeout(() => {
-                handlePageChangeWithoutStructure();
-                pageChangeTimeout = null;
-            }, 6000);
-        }
 
         if (windowTerminated) return;
 
